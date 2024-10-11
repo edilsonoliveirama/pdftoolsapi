@@ -1,8 +1,10 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi.responses import FileResponse  # Adicionei esta linha
 from pydantic import BaseModel
 import os
 import google.generativeai as genai
 import PyPDF2
+from PyPDF2 import PdfReader, PdfWriter
 from dotenv import load_dotenv
 
 # Carregar variáveis de ambiente do arquivo .env
@@ -21,52 +23,25 @@ genai.configure(api_key=API_KEY)
 class RespostaResumo(BaseModel):
     resumo: str
 
-def extrair_texto_de_pdf(arquivo_pdf):
-    leitor_pdf = PyPDF2.PdfReader(arquivo_pdf)
-    texto_extraido = ""
-    for pagina in leitor_pdf.pages:
-        texto = pagina.extract_text()
-        if texto:
-            texto_extraido += texto
-    return texto_extraido
+# Função para salvar PDF
+def salvar_pdf(writer: PdfWriter, output_path: str):
+    with open(output_path, "wb") as f:
+        writer.write(f)
 
-@app.post("/resumir_pdf", response_model=RespostaResumo)
-async def resumir_pdf(file: UploadFile = File(...)):
-    texto_pdf = extrair_texto_de_pdf(file.file)
-    
-    if not texto_pdf:
-        raise HTTPException(status_code=400, detail="Falha ao extrair texto do PDF.")
-    
-    try:
-        modelo = genai.GenerativeModel(model_name="gemini-1.5-flash")
-        prompt = f"Resuma o seguinte texto:\n\n{texto_pdf}"
-        resposta = modelo.generate_content(prompt)
-        
-        return {"resumo": resposta.text}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Falha ao gerar o resumo: {str(e)}")
+# Endpoint para proteger PDF com senha
+@app.post("/proteger_pdf")
+async def proteger_pdf(file: UploadFile = File(...), senha: str = "1234"):
+    reader = PdfReader(file.file)
+    writer = PdfWriter()
 
-@app.post("/gerar_conteudo", response_model=RespostaResumo)
-async def gerar_conteudo(prompt: str):
-    try:
-        modelo = genai.GenerativeModel(model_name="gemini-1.5-flash")
-        resposta = modelo.generate_content(prompt)
-        
-        return {"resumo": resposta.text}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Falha ao gerar conteúdo: {str(e)}")
+    for page in reader.pages:
+        writer.add_page(page)
 
-@app.post("/enviar_arquivo", response_model=RespostaResumo)
-async def enviar_arquivo(file: UploadFile = File(...)):
-    try:
-        texto_pdf = extrair_texto_de_pdf(file.file)
-        if not texto_pdf:
-            raise HTTPException(status_code=400, detail="Nenhum texto extraído do PDF.")
-        
-        modelo = genai.GenerativeModel(model_name="gemini-1.5-flash")
-        prompt = f"Resuma o seguinte texto:\n\n{texto_pdf}"
-        resposta = modelo.generate_content(prompt)
+    # Criptografar com senha
+    writer.encrypt(senha)
 
-        return {"resumo": resposta.text}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao processar o arquivo: {str(e)}")
+    encrypted_pdf_path = "/app/encrypted.pdf"
+    salvar_pdf(writer, encrypted_pdf_path)
+
+    # Retornar o arquivo para download
+    return FileResponse(encrypted_pdf_path, media_type='application/pdf', filename="encrypted.pdf")
